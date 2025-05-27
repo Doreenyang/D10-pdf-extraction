@@ -321,7 +321,7 @@ class ArchitecturalPDFExtractor:
 
 # Initialize with architectural PDF
 extractor = ArchitecturalPDFExtractor(
-    "static/construction_drawings.pdf",
+    "static/Project Manual_Volume 1.pdf",
     "static/construction_data.xlsx"
 )
 
