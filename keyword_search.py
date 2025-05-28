@@ -161,7 +161,7 @@ def main():
     sg.theme('SystemDefault')
     
     layout = [
-        [sg.Text('Free PDF Extractor', font=('Helvetica', 16))],
+        [sg.Text('PDF Extractor with Keyword Search', font=('Helvetica', 16))],
         [sg.Text('PDF File:'), sg.Input(key='-FILE-'), sg.FileBrowse(file_types=(("PDF Files", "*.pdf"),))],
         [sg.Text('Search Keywords (comma separated):'), sg.Input(key='-KEYWORDS-')],
         [sg.Button('Process PDF'), sg.Button('Search'), sg.Button('Export Excel'), sg.Button('Exit')],
