@@ -1,2 +1,5 @@
 static/
 temp_images/
+output/
+poppler/
+training_data/

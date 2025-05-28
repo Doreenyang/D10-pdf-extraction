@@ -1,176 +1,71 @@
 import os
 import sys
-import subprocess
-from PIL import Image
-import pandas as pd
-import re
-from datetime import datetime
-
-# Check and install required packages
-def install_packages():
-    required = {
-        'pymupdf': 'fitz',
-        'pytesseract': 'pytesseract',
-        'pdf2image': 'pdf2image',
-        'pandas': 'pandas',
-        'opencv-python': 'cv2',
-        'numpy': 'numpy',
-        'PySimpleGUI': 'PySimpleGUI'
-    }
-    
-    missing = []
-    for pkg, imp in required.items():
-        try:
-            __import__(imp)
-        except ImportError:
-            missing.append(pkg)
-    
-    if missing:
-        print("Installing missing packages:", ", ".join(missing))
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
-
-install_packages()
-
 import fitz  # PyMuPDF
-import pytesseract
-import pdf2image
 import PySimpleGUI as sg
-import numpy as np
-import cv2
+from datetime import datetime
+from PIL import Image
+import shutil
 
-class PDFExtractor:
+class ArchitecturalPDFConverter:
     def __init__(self):
-        self.text_data = []
-        self.drawing_pages = set()
-        self.keyword_hits = []
+        self.output_dir = "training_data"
+        os.makedirs(self.output_dir, exist_ok=True)
         
-    def extract_text(self, pdf_path):
-        """Extract text using PyMuPDF with OCR fallback"""
-        self.text_data = []
-        self.drawing_pages = set()
-        
+    def convert_pdf_to_images(self, pdf_path, dpi=600):
+        """Convert PDF pages to high-res images"""
         try:
             doc = fitz.open(pdf_path)
+            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
             
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                text = page.get_text()
+                # Render at high DPI
+                zoom = dpi / 72  # 72 is default PDF DPI
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
                 
-                # If little text found, try OCR
-                if len(text.strip()) < 100:
-                    try:
-                        pix = page.get_pixmap()
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        img = self.preprocess_image(img)
-                        text = pytesseract.image_to_string(img)
-                        self.drawing_pages.add(page_num + 1)
-                    except Exception as e:
-                        text = "[IMAGE/DRAWING PAGE]"
-                        self.drawing_pages.add(page_num + 1)
+                # Save as PNG
+                output_path = os.path.join(
+                    self.output_dir,
+                    f"{base_name}_page{page_num+1:03d}.png"
+                )
+                pix.save(output_path)
                 
-                self.text_data.append({
-                    'page': page_num + 1,
-                    'text': text,
-                    'is_drawing': (page_num + 1) in self.drawing_pages
-                })
-            
-            return len(doc)
+            return True, len(doc)
         except Exception as e:
-            sg.popup_error(f"Failed to process PDF:\n{str(e)}")
-            return 0
-    
-    def preprocess_image(self, img):
-        """Enhance image quality for better OCR results"""
-        try:
-            img_array = np.array(img)
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            processed = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 11, 2
-            )
-            return Image.fromarray(processed)
-        except:
-            return img
-    
-    def search_keywords(self, keywords):
-        """Search for keywords across all pages"""
-        self.keyword_hits = []
-        
-        for entry in self.text_data:
-            page = entry['page']
-            text = entry['text']
-            
-            for keyword in keywords:
-                if keyword.lower() in text.lower():
-                    start = max(0, text.lower().index(keyword.lower()) - 20)
-                    end = min(len(text), start + len(keyword) + 40)
-                    context = text[start:end].replace('\n', ' ')
-                    
-                    self.keyword_hits.append({
-                        'page': page,
-                        'keyword': keyword,
-                        'context': context,
-                        'is_drawing': entry['is_drawing']
-                    })
-        
-        return self.keyword_hits
-    
-    def generate_excel(self, output_path):
-        """Generate Excel report with all data"""
-        try:
-            excel_data = []
-            
-            # Document summary
-            excel_data.append({
-                'Type': 'Document Summary',
-                'Page': 'All',
-                'Content': f"Total pages: {len(self.text_data)}",
-                'Drawing Pages': len(self.drawing_pages),
-                'Is Drawing': ''
-            })
-            
-            # Keyword matches
-            for hit in self.keyword_hits:
-                excel_data.append({
-                    'Type': 'Keyword Match',
-                    'Page': hit['page'],
-                    'Keyword': hit['keyword'],
-                    'Content': hit['context'],
-                    'Is Drawing': 'Yes' if hit['is_drawing'] else 'No'
-                })
-            
-            # Page content
-            for entry in self.text_data:
-                content_preview = entry['text'][:200] + ("..." if len(entry['text']) > 200 else "")
-                excel_data.append({
-                    'Type': 'Page Content',
-                    'Page': entry['page'],
-                    'Content': content_preview,
-                    'Full Content Length': len(entry['text']),
-                    'Is Drawing': 'Yes' if entry['is_drawing'] else 'No'
-                })
-            
-            pd.DataFrame(excel_data).to_excel(output_path, index=False)
-            return True
-        except Exception as e:
-            sg.popup_error(f"Failed to generate Excel:\n{str(e)}")
-            return False
+            return False, str(e)
 
-def main():
-    # Set simple theme without requiring latest PySimpleGUI
-    sg.theme('SystemDefault')
+    def batch_convert(self, folder_path, dpi=600):
+        """Process all PDFs in a folder"""
+        results = []
+        for file in os.listdir(folder_path):
+            if file.lower().endswith('.pdf'):
+                pdf_path = os.path.join(folder_path, file)
+                success, pages_or_error = self.convert_pdf_to_images(pdf_path, dpi)
+                if success:
+                    results.append(f"Converted {file} ({pages_or_error} pages)")
+                else:
+                    results.append(f"Failed {file}: {pages_or_error}")
+        return results
+
+def create_gui():
+    sg.theme('LightBlue2')
     
     layout = [
-        [sg.Text('Free PDF Extractor', font=('Helvetica', 16))],
-        [sg.Text('PDF File:'), sg.Input(key='-FILE-'), sg.FileBrowse(file_types=(("PDF Files", "*.pdf"),))],
-        [sg.Text('Search Keywords (comma separated):'), sg.Input(key='-KEYWORDS-')],
-        [sg.Button('Process PDF'), sg.Button('Search'), sg.Button('Export Excel'), sg.Button('Exit')],
-        [sg.Multiline(size=(100, 25), key='-OUTPUT-', autoscroll=True, font=('Courier New', 10))],
-        [sg.StatusBar('Ready', key='-STATUS-', size=(100, 1))]
+        [sg.Text('Architectural Drawing Converter', font=('Helvetica', 16))],
+        [sg.Text('DPI Setting:'), sg.Input('600', key='-DPI-', size=(5,1))],
+        [
+            sg.Button('Convert Single PDF'),
+            sg.Button('Convert Folder'),
+            sg.Button('Open Output'),
+            sg.Button('Exit')
+        ],
+        [sg.Multiline(size=(80, 20), key='-OUTPUT-', autoscroll=True)],
+        [sg.StatusBar('Ready', key='-STATUS-')]
     ]
     
-    window = sg.Window('PDF Extraction Tool', layout)
-    extractor = PDFExtractor()
+    window = sg.Window('PDF to Training Data Converter', layout)
+    converter = ArchitecturalPDFConverter()
     
     while True:
         event, values = window.read()
@@ -178,70 +73,38 @@ def main():
         if event in (sg.WIN_CLOSED, 'Exit'):
             break
             
-        elif event == 'Process PDF':
-            if values['-FILE-'] and os.path.exists(values['-FILE-']):
-                window['-STATUS-'].update('Processing PDF...')
+        elif event == 'Convert Single PDF':
+            file = sg.popup_get_file('Select PDF', file_types=(("PDF Files", "*.pdf"),))
+            if file:
+                window['-STATUS-'].update('Converting...')
                 window['-OUTPUT-'].update('')
-                window.refresh()
-                
-                total_pages = extractor.extract_text(values['-FILE-'])
-                
-                if total_pages > 0:
-                    window['-OUTPUT-'].update(f"Processed {total_pages} pages\n")
-                    window['-OUTPUT-'].print(f"Found {len(extractor.drawing_pages)} drawing pages")
-                    window['-STATUS-'].update('Ready')
+                success, result = converter.convert_pdf_to_images(file, int(values['-DPI-']))
+                if success:
+                    window['-OUTPUT-'].print(f"Success! Created {result} image files")
                 else:
-                    window['-OUTPUT-'].update("Failed to process PDF")
-                    window['-STATUS-'].update('Error')
-            else:
-                sg.popup_error("Please select a valid PDF file")
+                    window['-OUTPUT-'].print(f"Error: {result}")
+                window['-STATUS-'].update('Ready')
                 
-        elif event == 'Search':
-            if hasattr(extractor, 'text_data') and extractor.text_data:
-                if values['-KEYWORDS-'].strip():
-                    keywords = [k.strip() for k in values['-KEYWORDS-'].split(',') if k.strip()]
-                    hits = extractor.search_keywords(keywords)
-                    
-                    if hits:
-                        result = f"Found {len(hits)} matches:\n\n"
-                        for hit in hits:
-                            result += f"Page {hit['page']}: {hit['keyword']}\n"
-                            result += f"Context: {hit['context']}\n\n"
-                        window['-OUTPUT-'].update(result)
-                        window['-STATUS-'].update(f"Found {len(hits)} matches")
-                    else:
-                        window['-OUTPUT-'].update("No matches found")
-                        window['-STATUS-'].update('No matches')
-                else:
-                    sg.popup_error("Please enter keywords to search")
-            else:
-                sg.popup_error("Please process a PDF first")
+        elif event == 'Convert Folder':
+            folder = sg.popup_get_folder('Select folder with PDFs')
+            if folder:
+                window['-STATUS-'].update('Batch converting...')
+                window['-OUTPUT-'].update('')
+                results = converter.batch_convert(folder, int(values['-DPI-']))
+                window['-OUTPUT-'].update('\n'.join(results))
+                window['-STATUS-'].update('Batch complete')
                 
-        elif event == 'Export Excel':
-            if hasattr(extractor, 'text_data') and extractor.text_data:
-                default_name = "extracted_data.xlsx"
-                if values['-FILE-']:
-                    default_name = os.path.splitext(os.path.basename(values['-FILE-']))[0] + "_extracted.xlsx"
-                
-                output_file = sg.popup_get_file('Save Excel File', save_as=True, 
-                                              default_extension='.xlsx',
-                                              file_types=(("Excel Files", "*.xlsx"),),
-                                              initial_folder=os.getcwd(),
-                                              default_path=default_name)
-                
-                if output_file:
-                    window['-STATUS-'].update('Exporting...')
-                    window.refresh()
-                    
-                    if extractor.generate_excel(output_file):
-                        sg.popup(f"Successfully exported to:\n{output_file}")
-                        window['-STATUS-'].update('Export complete')
-                    else:
-                        window['-STATUS-'].update('Export failed')
-            else:
-                sg.popup_error("Please process a PDF first")
+        elif event == 'Open Output':
+            if os.path.exists(converter.output_dir):
+                os.startfile(converter.output_dir)
     
     window.close()
 
 if __name__ == "__main__":
-    main()
+    # Check and install PyMuPDF if needed
+    try:
+        import fitz
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
+    
+    create_gui()
